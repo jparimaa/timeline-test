@@ -13,4 +13,6 @@ add_executable(${_target} ${_source_list})
 # Includes, libraries, compile options
 find_package(Vulkan REQUIRED)
 target_include_directories(${_target} PRIVATE ${_src_dir} ${Vulkan_INCLUDE_DIRS})
-target_link_libraries(${_target} PRIVATE ${Vulkan_LIBRARIES} )
+target_link_libraries(${_target} PRIVATE glfw ${Vulkan_LIBRARIES})
+
+add_subdirectory(glfw)
