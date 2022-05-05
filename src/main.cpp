@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <vector>
+#include <cstdlib>
 #include <vulkan/vulkan.h>
 
 VkInstance m_instance;
