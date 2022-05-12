@@ -32,12 +32,12 @@ VkQueue m_graphicsQueue;
 VkQueue m_presentQueue;
 VkCommandPool m_graphicsCommandPool;
 VkCommandBuffer m_commandBuffer;
-VkSemaphore m_imageAvailable;
-VkSemaphore m_renderFinished;
-VkSemaphore m_timelineSemaphore;
+std::vector<VkSemaphore> m_imageAvailableBinarySemaphores;
+std::vector<VkSemaphore> m_renderFinishedBinarySemaphores;
+std::vector<VkSemaphore> m_timelineSemaphores;
 VkFence m_fence;
 
-//#define ENABLE_TIMELINE
+#define ENABLE_TIMELINE_SEMAPHORES
 
 #ifdef _MSC_VER
 const std::vector<const char*> c_validationLayers{"VK_LAYER_KHRONOS_validation"};
@@ -47,7 +47,7 @@ const std::vector<const char*> c_validationLayers{};
 const std::vector<const char*> c_instanceExtensions{VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
 const std::vector<const char*> c_deviceExtensions{
     VK_KHR_SWAPCHAIN_EXTENSION_NAME, //
-#ifdef ENABLE_TIMELINE
+#ifdef ENABLE_TIMELINE_SEMAPHORES
     VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME //
 #endif
 };
@@ -278,7 +278,7 @@ void createDevice()
     VkPhysicalDeviceFeatures deviceFeatures{};
     VkPhysicalDeviceVulkan12Features device12Features{};
     device12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-#ifdef ENABLE_TIMELINE
+#ifdef ENABLE_TIMELINE_SEMAPHORES
     device12Features.timelineSemaphore = true;
 #endif
 
@@ -438,15 +438,23 @@ void allocateCommandBuffer()
 void createSemaphores()
 {
     {
+        m_imageAvailableBinarySemaphores.resize(c_swapchainImageCount);
+        m_renderFinishedBinarySemaphores.resize(c_swapchainImageCount);
+
         VkSemaphoreCreateInfo semaphoreInfo{};
         semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
-        VK_CHECK(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_imageAvailable));
-        VK_CHECK(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_renderFinished));
+        for (size_t i = 0; i < c_swapchainImageCount; ++i)
+        {
+            VK_CHECK(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_imageAvailableBinarySemaphores[i]));
+            VK_CHECK(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_renderFinishedBinarySemaphores[i]));
+        }
     }
 
-#ifdef ENABLE_TIMELINE
+#ifdef ENABLE_TIMELINE_SEMAPHORES
     {
+        m_timelineSemaphores.resize(c_swapchainImageCount);
+
         VkSemaphoreTypeCreateInfo timelineCreateInfo{};
         timelineCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
         timelineCreateInfo.pNext = NULL;
@@ -458,7 +466,10 @@ void createSemaphores()
         createInfo.pNext = &timelineCreateInfo;
         createInfo.flags = 0;
 
-        VK_CHECK(vkCreateSemaphore(m_device, &createInfo, NULL, &m_timelineSemaphore));
+        for (size_t i = 0; i < c_swapchainImageCount; ++i)
+        {
+            VK_CHECK(vkCreateSemaphore(m_device, &createInfo, NULL, &m_timelineSemaphores[i]));
+        }
     }
 #endif
 }
@@ -477,11 +488,14 @@ void destroyResources()
 {
     vkDeviceWaitIdle(m_device);
     vkDestroyFence(m_device, m_fence, nullptr);
-    vkDestroySemaphore(m_device, m_imageAvailable, nullptr);
-    vkDestroySemaphore(m_device, m_renderFinished, nullptr);
-#ifdef ENABLE_TIMELINE
-    vkDestroySemaphore(m_device, m_timelineSemaphore, nullptr);
+    for (size_t i = 0; i < c_swapchainImageCount; ++i)
+    {
+        vkDestroySemaphore(m_device, m_imageAvailableBinarySemaphores[i], nullptr);
+        vkDestroySemaphore(m_device, m_renderFinishedBinarySemaphores[i], nullptr);
+#ifdef ENABLE_TIMELINE_SEMAPHORES
+        vkDestroySemaphore(m_device, m_timelineSemaphores[i], nullptr);
 #endif
+    }
     vkDestroyCommandPool(m_device, m_graphicsCommandPool, nullptr);
 
     for (const VkFramebuffer& framebuffer : m_framebuffers)
@@ -530,10 +544,11 @@ int main(void)
     createFence();
 
     uint64_t semaphoreCounter = 0;
+    uint64_t frameIndex = 0;
     while (!(glfwWindowShouldClose(m_window) || m_shouldQuit))
     {
         uint32_t imageIndex;
-        VK_CHECK(vkAcquireNextImageKHR(m_device, m_swapchain, c_timeout, m_imageAvailable, VK_NULL_HANDLE, &imageIndex));
+        VK_CHECK(vkAcquireNextImageKHR(m_device, m_swapchain, c_timeout, m_imageAvailableBinarySemaphores[frameIndex], VK_NULL_HANDLE, &imageIndex));
         VK_CHECK(vkWaitForFences(m_device, 1, &m_fence, true, c_timeout));
         VK_CHECK(vkResetFences(m_device, 1, &m_fence));
 
@@ -566,43 +581,44 @@ int main(void)
         VK_CHECK(vkEndCommandBuffer(cb));
 
         const std::vector<VkPipelineStageFlags> waitStages{VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-        ++semaphoreCounter;
-        const std::vector<uint64_t> signalValues{semaphoreCounter};
 
-#ifdef ENABLE_TIMELINE
+        ++semaphoreCounter;
+        const std::vector<uint64_t> signalValues(2, semaphoreCounter);
+        void* next = nullptr;
+        std::vector<VkSemaphore> signalSemaphores;
+
+#ifdef ENABLE_TIMELINE_SEMAPHORES
+        signalSemaphores.push_back(m_timelineSemaphores[frameIndex]);
+
         VkTimelineSemaphoreSubmitInfo timelineInfo{};
         timelineInfo.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
         timelineInfo.pNext = NULL;
         timelineInfo.waitSemaphoreValueCount = 0;
         timelineInfo.pWaitSemaphoreValues = NULL;
-        timelineInfo.signalSemaphoreValueCount = 1;
+        timelineInfo.signalSemaphoreValueCount = ui32Size(signalValues);
         timelineInfo.pSignalSemaphoreValues = signalValues.data();
+        next = &timelineInfo;
 #endif
+
+        signalSemaphores.push_back(m_renderFinishedBinarySemaphores[frameIndex]);
 
         VkSubmitInfo submitInfo{};
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-#ifdef ENABLE_TIMELINE
-        submitInfo.pNext = &timelineInfo;
-#endif
+        submitInfo.pNext = next;
         submitInfo.waitSemaphoreCount = 1;
-        submitInfo.pWaitSemaphores = &m_imageAvailable;
+        submitInfo.pWaitSemaphores = &m_imageAvailableBinarySemaphores[frameIndex];
         submitInfo.pWaitDstStageMask = waitStages.data();
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers = &m_commandBuffer;
-#ifdef ENABLE_TIMELINE
-        submitInfo.signalSemaphoreCount = 1;
-        submitInfo.pSignalSemaphores = &m_timelineSemaphore;
-#else
-        submitInfo.signalSemaphoreCount = 0;
-        submitInfo.pSignalSemaphores = nullptr;
-#endif
+        submitInfo.signalSemaphoreCount = ui32Size(signalSemaphores);
+        submitInfo.pSignalSemaphores = signalSemaphores.data();
 
         VK_CHECK(vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, m_fence));
 
         VkPresentInfoKHR presentInfo{};
         presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        presentInfo.waitSemaphoreCount = 0;
-        presentInfo.pWaitSemaphores = nullptr;
+        presentInfo.waitSemaphoreCount = 1;
+        presentInfo.pWaitSemaphores = &m_renderFinishedBinarySemaphores[frameIndex];
         presentInfo.swapchainCount = 1;
         presentInfo.pSwapchains = &m_swapchain;
         presentInfo.pImageIndices = &imageIndex;
@@ -611,6 +627,12 @@ int main(void)
         VK_CHECK(vkQueuePresentKHR(m_presentQueue, &presentInfo));
 
         glfwPollEvents();
+
+        ++frameIndex;
+        if (frameIndex == c_swapchainImageCount)
+        {
+            frameIndex = 0;
+        }
     }
 
     destroyResources();
