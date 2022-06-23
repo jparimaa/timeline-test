@@ -57,7 +57,7 @@ const int c_windowHeight = 600;
 const VkSurfaceFormatKHR c_windowSurfaceFormat{VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
 const VkExtent2D c_windowExtent{c_windowWidth, c_windowHeight};
 const uint32_t c_swapchainImageCount = 3;
-const uint64_t c_timeout = 10'000'000'000;
+const uint64_t c_timeout = 10000000000;
 
 #define VK_CHECK(f)                                                                             \
     do                                                                                          \
